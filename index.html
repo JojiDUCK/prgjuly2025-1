@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pet the Dog!</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Custom font for a clean look */
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            overflow: hidden; /* Prevent scrolling */
+        }
+
+        /* Custom cursor with emoji */
+        .clickable-dog {
+            cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewport="0 0 100 100" style="fill:black;font-size:24px;"><text y="50%">👋</text></svg>') 15 15, auto;
+        }
+
+        /* Basic styling for the dog image and its movement transitions */
+        .dog-image {
+            transition: transform 0.1s ease-out, top 0.5s ease-in-out, left 0.5s ease-in-out, opacity 0.3s ease-in-out; /* Smooth scale on click, smooth movement, smooth fade */
+        }
+
+        .dog-image:active {
+            transform: scale(0.95); /* Slightly shrink on active click */
+        }
+
+        /* Message box styling (fade in/out) */
+        .message-box {
+            position: absolute; /* Position absolutely within its relative parent */
+            bottom: 0; /* Align to the bottom */
+            left: 0;
+            right: 0;
+            opacity: 0; /* Start hidden */
+            transition: opacity 0.5s ease-in-out; /* Smooth fade effect */
+            pointer-events: none; /* Do not block clicks when invisible */
+            z-index: 10; /* Ensure it's above other content */
+        }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-blue-200 to-purple-300 min-h-screen flex items-center justify-center p-4">
+
+    <div id="game-container" class="bg-white p-8 rounded-3xl shadow-2xl text-center max-w-xl w-full border-4 border-blue-400 flex flex-col items-center justify-center relative pb-20">
+        <!-- Added relative and pb-20 to make space for the absolutely positioned message box -->
+        <h1 class="text-5xl font-extrabold mb-8 text-blue-700 drop-shadow-lg">Pet the Dog!</h1>
+
+        <div class="flex flex-col sm:flex-row justify-between items-center mb-4 gap-4 w-full px-4">
+            <div class="text-3xl font-bold text-gray-800 bg-blue-100 py-3 px-6 rounded-xl shadow-inner">Pets: <span id="score" class="text-blue-600">0</span></div>
+            <div class="text-3xl font-bold text-gray-800 bg-blue-100 py-3 px-6 rounded-xl shadow-inner">Time: <span id="timer" class="text-blue-600">20s</span></div>
+            <button id="startButton" class="bg-green-600 hover:bg-green-700 text-white font-bold py-4 px-8 rounded-full shadow-lg transition duration-300 ease-in-out transform hover:scale-105 active:scale-95 focus:outline-none focus:ring-4 focus:ring-green-300">Start Game</button>
+        </div>
+
+        <!-- This is the playable area where the dog will move -->
+        <div id="game-area" class="relative w-full flex-grow min-h-[300px] bg-gray-100 rounded-lg overflow-hidden border-2 border-gray-300 flex items-center justify-center">
+            <!-- The dog images will be absolutely positioned within this area -->
+            <img id="dogImage1" src="" alt="Sleeping dog" class="dog-image absolute w-32 h-auto rounded-full shadow-md">
+            <img id="dogImage2" src="" alt="Sleeping dog" class="dog-image absolute w-32 h-auto rounded-full shadow-md opacity-0 pointer-events-none">
+            <img id="dogImage3" src="" alt="Sleeping dog" class="dog-image absolute w-32 h-auto rounded-full shadow-md opacity-0 pointer-events-none">
+        </div>
+
+        <!-- Message box now positioned absolutely -->
+        <div id="message-box" class="message-box p-5 bg-yellow-200 border border-yellow-500 text-yellow-900 rounded-xl shadow-md text-xl font-semibold text-center"></div>
+    </div>
+
+    <script>
+        // --- Constants ---
+        const SLEEPING_DOG_URL = "https://github.com/JojiDUCK/prgjuly2025-1/blob/main/dog%20sleep.png?raw=true";
+        const AWAKE_DOG_URL = "https://github.com/JojiDUCK/prgjuly2025-1/blob/main/dog%20awake.png?raw=true";
+        const CAR_HORN_SFX_URL = "https://github.com/JojiDUCK/prgjuly2025-1/blob/main/short_car_horn.mp3?raw=true";
+        const AWAKE_DURATION = 600; // milliseconds dog stays awake before going back to sleep
+        const MOVEMENT_INTERVAL = 1500; // milliseconds for how often the dog moves
+        const GAME_DURATION = 20; // seconds
+        const THREE_DOG_THRESHOLD = 7; // seconds remaining when 3 dogs appear
+        const MESSAGE_DISPLAY_DURATION = 3000; // milliseconds for message to be visible
+
+        // --- Game State Variables ---
+        let score = 0;
+        let gameTimer = GAME_DURATION;
+        let gameRunning = false;
+        let movementIntervalId = null; // Stores the interval ID for dog movement
+        let countdownIntervalId = null; // Stores the interval ID for the game timer
+        let activeDogsCount = 1; // Number of dogs currently active (1 or 3)
+
+        // Store references to dog image elements and their states
+        const dogElements = [
+            document.getElementById('dogImage1'),
+            document.getElementById('dogImage2'),
+            document.getElementById('dogImage3')
+        ];
+        const dogStates = dogElements.map(() => ({
+            isSleeping: true,
+            awakeTimeoutId: null
+        }));
+
+        // --- DOM Elements ---
+        const startButton = document.getElementById('startButton');
+        const scoreDisplay = document.getElementById('score');
+        const timerDisplay = document.getElementById('timer');
+        const messageBox = document.getElementById('message-box');
+        const gameArea = document.getElementById('game-area'); // The container for dog movement
+
+        // --- Audio Object ---
+        const carHornSound = new Audio(CAR_HORN_SFX_URL);
+        carHornSound.volume = 0.7; // Set a default volume
+
+        // --- Functions ---
+
+        /**
+         * Displays a message to the user in the message box.
+         * @param {string} message - The message to display.
+         */
+        function showMessage(message) {
+            messageBox.textContent = message;
+            messageBox.style.opacity = '1'; // Make visible
+            messageBox.style.pointerEvents = 'auto'; // Enable interaction if needed (though not for this message box)
+
+            setTimeout(() => {
+                messageBox.style.opacity = '0'; // Fade out
+                messageBox.style.pointerEvents = 'none'; // Disable interaction after fade out
+            }, MESSAGE_DISPLAY_DURATION);
+        }
+
+        /**
+         * Plays the car horn sound effect.
+         */
+        function playCarHornSound() {
+            // Clone the sound to allow multiple car horns to overlap without cutting off
+            const soundClone = carHornSound.cloneNode();
+            soundClone.play().catch(e => console.error("Error playing sound:", e));
+        }
+
+        /**
+         * Sets a specific dog image to sleeping state.
+         * @param {HTMLElement} dogElement - The image element of the dog.
+         * @param {object} dogState - The state object for this specific dog.
+         */
+        function setDogToSleeping(dogElement, dogState) {
+            dogElement.src = SLEEPING_DOG_URL;
+            dogElement.alt = 'Sleeping dog';
+            dogState.isSleeping = true;
+            dogElement.classList.add('clickable-dog'); // Make it clickable again
+        }
+
+        /**
+         * Moves a specific dog image to a random position within the game area.
+         * Ensures the dog stays fully within bounds and doesn't overlap text.
+         * @param {HTMLElement} dogElement - The image element of the dog to move.
+         */
+        function moveDogToRandomPosition(dogElement) {
+            // Ensure dogElement dimensions are available
+            if (dogElement.offsetWidth === 0 || dogElement.offsetHeight === 0) {
+                // If dimensions are not yet available (e.g., image not loaded), try again later
+                setTimeout(() => moveDogToRandomPosition(dogElement), 100);
+                return;
+            }
+
+            const gameAreaWidth = gameArea.offsetWidth;
+            const gameAreaHeight = gameArea.offsetHeight;
+            const dogWidth = dogElement.offsetWidth;
+            const dogHeight = dogElement.offsetHeight;
+
+            // Calculate maximum X and Y coordinates for the dog's top-left corner
+            // Ensure dog stays fully within the game area
+            const maxX = Math.max(0, gameAreaWidth - dogWidth);
+            const maxY = Math.max(0, gameAreaHeight - dogHeight);
+
+            // Generate random coordinates
+            const randomX = Math.floor(Math.random() * (maxX + 1));
+            const randomY = Math.floor(Math.random() * (maxY + 1));
+
+            // Apply positions
+            dogElement.style.left = `${randomX}px`;
+            dogElement.style.top = `${randomY}px`;
+        }
+
+        /**
+         * Moves all currently active dogs to random positions.
+         */
+        function moveAllActiveDogs() {
+            for (let i = 0; i < activeDogsCount; i++) {
+                moveDogToRandomPosition(dogElements[i]);
+            }
+        }
+
+        /**
+         * Handles the click event on any dog image.
+         * @param {Event} event - The click event.
+         */
+        function handleDogClick(event) {
+            const clickedDogElement = event.target;
+            // Bug: The variable name here is `clickedDogDogElement`, but it should be `clickedDogElement`
+            // This is a subtle bug that students can find!
+            const dogIndex = dogElements.indexOf(clickedDogElement); 
+
+            if (dogIndex === -1 || !gameRunning) return; // Not a dog element or game not running
+
+            const dogState = dogStates[dogIndex];
+
+            if (dogState.isSleeping) {
+                // If sleeping, wake the dog up
+                clickedDogElement.src = AWAKE_DOG_URL;
+                clickedDogElement.alt = 'Awake dog';
+                dogState.isSleeping = false;
+                clickedDogElement.classList.remove('clickable-dog'); // Prevent multiple rapid clicks while awake
+                playCarHornSound();
+                score++; // Increment score on successful click
+                scoreDisplay.textContent = score;
+                showMessage("Honk! You got a pet!");
+
+                // Clear any existing timeout for this specific dog
+                if (dogState.awakeTimeoutId) {
+                    clearTimeout(dogState.awakeTimeoutId);
+                }
+
+                // Set a timeout to change back to sleeping after a short duration
+                dogState.awakeTimeoutId = setTimeout(() => {
+                    setDogToSleeping(clickedDogElement, dogState);
+                    // After the dog goes back to sleep, immediately move it to a new position
+                    moveDogToRandomPosition(clickedDogElement);
+                }, AWAKE_DURATION);
+            }
+        }
+
+        /**
+         * Ends the game, clears intervals and displays final score.
+         */
+        function endGame() {
+            gameRunning = false;
+            clearInterval(countdownIntervalId);
+            clearInterval(movementIntervalId);
+
+            // Clear any pending awake timeouts for all dogs
+            dogStates.forEach(state => {
+                if (state.awakeTimeoutId) {
+                    clearTimeout(state.awakeTimeoutId);
+                    state.awakeTimeoutId = null;
+                }
+            });
+
+            // Hide all dogs and remove clickability
+            dogElements.forEach((element, index) => {
+                element.classList.remove('clickable-dog');
+                element.style.opacity = '0';
+                element.style.pointerEvents = 'none';
+                dogStates[index].isSleeping = true; // Reset state
+            });
+
+            startButton.disabled = false;
+            startButton.textContent = 'Start Game';
+            timerDisplay.textContent = '0s';
+            showMessage(`Game Over! Your final score is: ${score} pets!`);
+        }
+
+        /**
+         * Initializes or resets the game interaction.
+         */
+        function initializeGame() {
+            if (gameRunning) { // If game is already running, end it first to reset
+                endGame();
+            }
+
+            score = 0;
+            scoreDisplay.textContent = score;
+            gameTimer = GAME_DURATION;
+            timerDisplay.textContent = `${gameTimer}s`;
+            gameRunning = true;
+            startButton.disabled = true;
+            startButton.textContent = 'Game In Progress...';
+            activeDogsCount = 1; // Start with one dog
+
+            // Reset all dog states and hide extras
+            dogElements.forEach((element, index) => {
+                setDogToSleeping(element, dogStates[index]);
+                element.style.opacity = (index === 0) ? '1' : '0'; // Only first dog visible initially
+                element.style.pointerEvents = (index === 0) ? 'auto' : 'none'; // Only first dog clickable
+                moveDogToRandomPosition(element); // Place all dogs initially
+            });
+
+            showMessage("Click the sleeping dog to pet it!");
+
+            // Clear any existing intervals before starting new ones
+            if (countdownIntervalId) clearInterval(countdownIntervalId);
+            if (movementIntervalId) clearInterval(movementIntervalId);
+
+            // Start game countdown
+            countdownIntervalId = setInterval(() => {
+                gameTimer--;
+                timerDisplay.textContent = `${gameTimer}s`;
+
+                // Logic for 3 dogs in the last 7 seconds
+                if (gameTimer <= THREE_DOG_THRESHOLD && activeDogsCount === 1) {
+                    activeDogsCount = 3;
+                    showMessage("Three dogs! Pet them all!");
+                    // Make the other two dogs visible and clickable
+                    for (let i = 1; i < activeDogsCount; i++) {
+                        dogElements[i].style.opacity = '1';
+                        dogElements[i].style.pointerEvents = 'auto';
+                        setDogToSleeping(dogElements[i], dogStates[i]); // Ensure they are sleeping
+                        moveDogToRandomPosition(dogElements[i]); // Move them immediately
+                    }
+                }
+
+                if (gameTimer <= 0) {
+                    endGame();
+                }
+            }, 1000);
+
+            // Start dog movement for all active dogs
+            movementIntervalId = setInterval(moveAllActiveDogs, MOVEMENT_INTERVAL);
+        }
+
+        // --- Event Listeners ---
+        startButton.addEventListener('click', initializeGame);
+        dogElements.forEach(dog => {
+            dog.addEventListener('click', handleDogClick);
+        });
+
+        // --- Initial Setup ---
+        window.onload = function() {
+            // Set initial image source for all dogs on load
+            dogElements.forEach((element, index) => {
+                element.src = SLEEPING_DOG_URL;
+                element.alt = 'Sleeping dog';
+                // Initially hide dogImage2 and dogImage3
+                if (index > 0) {
+                    element.style.opacity = '0';
+                    element.style.pointerEvents = 'none';
+                }
+            });
+            showMessage("Click 'Start Game' to begin petting!");
+            // Set an initial position for all dogs when the page loads
+            dogElements.forEach(moveDogToRandomPosition);
+        };
+
+    </script>
+</body>
+</html>
